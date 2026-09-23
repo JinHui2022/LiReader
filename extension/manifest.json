@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "LiReader",
+  "version": "0.1.0",
+  "description": "Immersive reading: bionic reading, spotlight focus, and editing tools for web articles.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://api.dictionaryapi.dev/*",
+    "https://api.datamuse.com/*",
+    "https://*.wikipedia.org/*",
+    "https://*.wiktionary.org/*",
+    "https://api.mymemory.translated.net/*",
+    "https://api.cognitive.microsofttranslator.com/*",
+    "https://translate.googleapis.com/*",
+    "https://lingva.ml/*"
+  ],
+  "icons": {
+    "16": "imgs/icon16.png",
+    "48": "imgs/icon48.png",
+    "128": "imgs/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Toggle LiReader",
+    "default_icon": {
+      "16": "imgs/icon16.png",
+      "48": "imgs/icon48.png",
+      "128": "imgs/icon128.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lib/Readability.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["imgs/background.png"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
