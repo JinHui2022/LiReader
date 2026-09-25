@@ -124,6 +124,12 @@
     #lireader-overlay .lr-para a:not(.lr-cite-link) {
       color: #3b6fc0; text-decoration: underline dotted rgba(59,111,192,.45);
     }
+    #lireader-overlay .lr-figure { margin: 1.2em 0; text-align: center; }
+    #lireader-overlay .lr-figure img { max-width: 100%; height: auto; border-radius: 4px; }
+    #lireader-overlay .lr-figcaption { font: 13px/1.5 system-ui, sans-serif; color: #666; margin-top: 6px; }
+    #lireader-overlay .lr-math { margin: 0.8em 0; }
+    #lireader-overlay .lr-math-display { text-align: center; overflow-x: auto; }
+    #lireader-overlay .lr-math math { font-size: 1.05em; }
     #lireader-overlay .lr-xsnow-hint {
       display: none; padding: 6px 16px; font: 12px system-ui, sans-serif;
       color: #333; background: #eef0f8; border-top: 1px solid #d9dbe8;
@@ -294,7 +300,7 @@
       let skip = false;
       while (p && p !== root) {
         const t = p.tagName;
-        if (t === "A" || t === "SUP" || t === "SUB") { skip = true; break; }
+        if (t === "A" || t === "SUP" || t === "SUB" || t === "MATH") { skip = true; break; }
         p = p.parentElement;
       }
       if (!skip) nodes.push(walker.currentNode);
@@ -311,7 +317,7 @@
     const nodes = [];
     while (walker.nextNode()) {
       const p = walker.currentNode.parentElement;
-      if (p && (p.tagName === "A" || p.tagName === "SUP" || p.tagName === "SUB")) continue;
+      if (p && (p.tagName === "A" || p.tagName === "SUP" || p.tagName === "SUB" || p.tagName === "MATH")) continue;
       nodes.push(walker.currentNode);
     }
     for (const n of nodes) {
@@ -362,10 +368,40 @@
     "PRE", "H1", "H2", "H3", "H4", "H5", "H6",
   ]);
 
+  function extractImg(el) {
+    let img = null, container = null;
+    if (el.tagName === "IMG") { img = el; }
+    else { img = el.querySelector("img"); container = el; }
+    if (!img) return null;
+    let src = img.getAttribute("data-src") || img.getAttribute("data-lazy-src") || img.getAttribute("src") || "";
+    if (!src && img.getAttribute("srcset")) {
+      const cands = img.getAttribute("srcset").split(",");
+      const best = cands[cands.length - 1].trim().split(/\s+/)[0];
+      if (best) src = best;
+    }
+    if (!src || /^(data:|about:blank)/i.test(src)) return null;
+    const fig = (container || img).closest ? (container || img).closest("figure") : null;
+    const capEl = fig ? fig.querySelector("figcaption") : null;
+    const caption = capEl ? capEl.innerText.trim() : "";
+    return { type: "img", src, alt: img.getAttribute("alt") || "", caption };
+  }
+
   function collectBlocks(root) {
     const out = [];
+    function isImg(el) {
+      return el.tagName === "IMG" || el.tagName === "PICTURE" || el.tagName === "FIGURE";
+    }
     function walk(el) {
       if (el.nodeType !== 1) return;
+      if (isImg(el)) {
+        const im = extractImg(el);
+        if (im) out.push(im);
+        return;
+      }
+      if (el.tagName === "MATH") {
+        out.push({ type: "math", html: el.outerHTML, display: el.getAttribute("display") === "block" });
+        return;
+      }
       const text = (el.innerText || "").trim();
       if (!text) return;
       const tag = el.tagName;
@@ -374,7 +410,7 @@
         return;
       }
       const kids = Array.from(el.children);
-      const hasBlockChild = kids.some((c) => BLOCK_TAGS.has(c.tagName));
+      const hasBlockChild = kids.some((c) => BLOCK_TAGS.has(c.tagName) || isImg(c));
       if (!hasBlockChild) {
         out.push({ type: "p", text, html: el.innerHTML });
         return;
@@ -396,6 +432,26 @@
     if (end === -1) end = blocks.length;
     if (end < start) end = start;
     return blocks.slice(start, end);
+  }
+
+  function hasAbstractHeading(blocks) {
+    return blocks.some((b) => b.type === "h" && /^abstract/i.test(b.text.trim()));
+  }
+
+  function extractAbstractFromOriginal() {
+    let abs = document.querySelector('[id*="abstract" i], [class*="abstract" i], [id*="Abs1"], [class*="Abs1"]');
+    if (!abs) {
+      const heads = Array.from(document.querySelectorAll("h1,h2,h3,h4,h5,h6"));
+      const h = heads.find((x) => /^abstract$/i.test(x.innerText.trim()));
+      abs = h ? h.parentElement : null;
+    }
+    if (!abs) return [];
+    const clone = abs.cloneNode(true);
+    clone.querySelectorAll("script,style,nav,sup,sub,svg,img,button,a").forEach((n) => n.remove());
+    const text = (clone.innerText || "").trim().replace(/^abstract\s*:?\s*/i, "").trim();
+    if (!text) return [];
+    const paras = text.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean).slice(0, 6);
+    return paras.map((t) => ({ type: "p", text: t, html: escapeHtml(t) }));
   }
 
   function extractArticle() {
@@ -437,12 +493,24 @@
         blocks[0].text.trim().toLowerCase() === title.trim().toLowerCase()) {
       blocks.shift();
     }
+    // If the abstract was dropped (no "Abstract" heading and the body starts
+    // with a section heading), recover it from the original page.
+    if (blocks.length && blocks[0].type === "h" && !hasAbstractHeading(blocks)) {
+      const abs = extractAbstractFromOriginal();
+      if (abs.length) {
+        blocks = [{ type: "h", level: 2, text: "Abstract", html: "Abstract" }].concat(abs, blocks);
+      }
+    }
     blocks = trimToAbstractReference(blocks);
     return { title, blocks };
   }
 
   function slug(s) {
     return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "section";
+  }
+
+  function resolveUrl(src) {
+    try { return new URL(src, location.href).href; } catch (e) { return src; }
   }
 
   // ---------------------------------------------------------------------------
@@ -558,7 +626,7 @@
           <span class="lr-label">MS key</span>
           <input type="password" class="lr-input" data-act="msKey" placeholder="Microsoft Translator key">
         </div>
-        <div class="lr-xsnow-hint">XSnow: ←→↑↓ move · Shift select · Enter link · Y/U/I highlight · Q/W/E lookup · R bionic · T spotlight · Esc exit</div>
+        <div class="lr-xsnow-hint">XSnow: ←→↑↓ move · Shift select · Enter link · Y/U/I highlight · J bold · K italic · Q/W/E lookup · R bionic · T spotlight · Esc exit</div>
       </div>
       <div class="lr-reading-line"></div>
       <div class="lr-content"></div>
@@ -716,6 +784,26 @@
         el.id = ids[hi++];
         el.innerHTML = state.bionic ? bionicHtml(b.text) : escapeHtml(b.text);
         frag.appendChild(el);
+      } else if (b.type === "img") {
+        const fig = document.createElement("figure");
+        fig.className = "lr-block lr-figure";
+        const img = document.createElement("img");
+        img.src = resolveUrl(b.src);
+        img.alt = b.alt || "";
+        img.loading = "lazy";
+        fig.appendChild(img);
+        if (b.caption) {
+          const cap = document.createElement("figcaption");
+          cap.className = "lr-figcaption";
+          cap.textContent = b.caption;
+          fig.appendChild(cap);
+        }
+        frag.appendChild(fig);
+      } else if (b.type === "math") {
+        const wrap = document.createElement("div");
+        wrap.className = "lr-block lr-math" + (b.display ? " lr-math-display" : "");
+        wrap.innerHTML = b.html;
+        frag.appendChild(wrap);
       } else {
         const el = document.createElement("p");
         el.className = "lr-block lr-para";
@@ -871,7 +959,7 @@
         let p = n.parentElement, skip = false;
         while (p && p !== block) {
           const t = p.tagName;
-          if (t === "SUP" || t === "SUB") { skip = true; break; }
+          if (t === "SUP" || t === "SUB" || t === "MATH") { skip = true; break; }
           p = p.parentElement;
         }
         if (skip) continue;
@@ -1047,6 +1135,44 @@
     if (state.xsnowIndex >= 0) selectRange(state.xsnowAnchor, state.xsnowIndex);
   }
 
+  // Wrap the current selection (single word or Shift-selected range) in a tag.
+  function wrapSelection(tagName) {
+    if (!state.xsnowWords || !state.xsnowWords.length) return;
+    const lo = Math.min(state.xsnowAnchor, state.xsnowIndex);
+    const hi = Math.max(state.xsnowAnchor, state.xsnowIndex);
+    const wl = state.xsnowWords[lo], wr = state.xsnowWords[hi];
+    const r = document.createRange();
+    r.setStart(wl.startContainer, wl.startOffset);
+    r.setEnd(wr.endContainer, wr.endOffset);
+    const text = r.toString();
+    if (!text) return;
+    r.deleteContents();
+    const el = document.createElement(tagName);
+    el.textContent = text;
+    r.insertNode(el);
+    // The DOM changed — rebuild word ranges and keep the cursor/selection.
+    state.xsnowWords = collectWordRanges(content);
+    state.xsnowIndex = Math.min(state.xsnowIndex, state.xsnowWords.length - 1);
+    state.xsnowAnchor = Math.min(state.xsnowAnchor, state.xsnowWords.length - 1);
+    if (state.xsnowIndex >= 0) selectRange(state.xsnowAnchor, state.xsnowIndex);
+  }
+
+  function toggleInline(tagName) {
+    const w = state.xsnowWords && state.xsnowWords[state.xsnowIndex];
+    if (!w) return;
+    const el = w.startContainer.nodeType === 1 ? w.startContainer : w.startContainer.parentElement;
+    // If the current word is already wrapped in this tag, unwrap it (toggle off).
+    if (el && el.tagName === tagName.toUpperCase() && el.textContent.trim() === w.text.trim()) {
+      el.replaceWith(document.createTextNode(el.textContent));
+      state.xsnowWords = collectWordRanges(content);
+      state.xsnowIndex = Math.min(state.xsnowIndex, state.xsnowWords.length - 1);
+      state.xsnowAnchor = Math.min(state.xsnowAnchor, state.xsnowWords.length - 1);
+      if (state.xsnowIndex >= 0) selectRange(state.xsnowAnchor, state.xsnowIndex);
+      return;
+    }
+    wrapSelection(tagName);
+  }
+
   function lookupWord(type) {
     if (!state.xsnowWords || !state.xsnowWords.length) return;
     const lo = Math.min(state.xsnowAnchor, state.xsnowIndex);
@@ -1112,6 +1238,8 @@
     else if (code === "KeyD") { e.preventDefault(); setFontSize(1); }
     else if (code === "KeyR") { e.preventDefault(); toggleBionic(); }
     else if (code === "KeyT") { e.preventDefault(); toggleSpotlight(); }
+    else if (code === "KeyJ") { e.preventDefault(); toggleInline("strong"); }
+    else if (code === "KeyK") { e.preventDefault(); toggleInline("em"); }
   }
 
   // ---- Lookup: dictionary / Wikipedia / translate ----
