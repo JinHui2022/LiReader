@@ -952,14 +952,21 @@
     sel.addRange(r);
   }
 
+  function scrollWordToReadingLine(w) {
+    const r = wordRect(w);
+    if (!r) return;
+    const lineY = window.innerHeight * 0.5;
+    const delta = (r.top + r.height / 2) - lineY;
+    content.scrollBy({ top: delta, behavior: "smooth" });
+  }
+
   function setXsnowIndex(i, shift) {
     if (!shift) state.xsnowAnchor = i;
     state.xsnowIndex = i;
     const w = state.xsnowWords[i];
     if (!w) return;
     selectRange(state.xsnowAnchor, state.xsnowIndex);
-    const el = w.startContainer.nodeType === 1 ? w.startContainer : w.startContainer.parentElement;
-    if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    scrollWordToReadingLine(w);
   }
 
   function moveVertical(dir, shift) {
